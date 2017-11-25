@@ -2,61 +2,65 @@ import Utils.Edge
 import org.apache.flink.api.common.functions.RichMapFunction
 import org.apache.flink.api.scala.ExecutionEnvironment
 import org.apache.flink.api.scala._
-
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 
 
 object Triest extends App {
   val env = ExecutionEnvironment.getExecutionEnvironment
+  val maxEdges = 3000
 
   // Well, in this case a file..
-  val stream = env.readTextFile("data/out.moreno_blogs_blogs")
+  val stream = env.readTextFile("data/out.dolphins")
+  val triestBase = new Triest[Int](maxEdges)
 
-  val edges: DataSet[Edge[Int,Int]] = stream.filter(line => line.nonEmpty && !line.startsWith("%"))
-      .map(_.split(" ") match {case Array(a, b) => (a.toInt, b.toInt)})
+  val job = stream.filter(line => !line.startsWith("%"))
+    .map(_.split("\\s+") match { case Array(a, b) => (a.toInt, b.toInt)})
+    .map(triestBase)
+    .setParallelism(1)
 
-  val maxEdges = 100
-  edges.map(new Triest[Int, Int](maxEdges))
-    .print()
-
+  job.print()
 }
 
 
-/** Following the implementation of the paper
+/** Implementation of TRIÈST-BASE, for undirected graphs.
   *
   * @param m Max Edges in our Sampling
   */
-class Triest[A,B](m: Int) extends RichMapFunction[Edge[A,B], Double] {
-  // Our counter
+class Triest[A](m: Int) extends RichMapFunction[Edge[A], Int] {
+  // Counter of current items processed
   private[this] var t = 0
+  // Counter of current global triangles
+  private[this] var tglobal = 0
+  // HashMap of local triangles
+  private[this] var tlocal = scala.collection.mutable.HashMap[A,Int]()
+  // Our container, that maximum holds m edges
+  private[this] var sample = ArrayBuffer[Edge[A]]()
 
-  private[this] var sample = ArrayBuffer[Edge[A,B]]()
-
-
-  // this will handle the logic for each "iteration"
-  override def map(edge: Edge[A,B]): Double = {
+  override def map(edge: Edge[A]): Int = {
     t += 1
     if (sampleEdge(edge, t)) {
       sample.append(edge)
       updateCounters(Increment, edge)
     }
 
-    // return latest estimate..
-    // Estimation in the paper
-    // max = (1, (t(t-1)(t-2))/M(M-1)(M-2)))
-    0.5
+    // Just in case that we have gigantic data
+    val longT = t.toLong
+    val longM = m.toLong
+    val estimate = (longT * (longT-1) * (longT-2)) / (longM * (longM-1)*(longM-2))
+    val max = Math.max(1, estimate).toDouble
+    // Return an approximation of global triangles count
+    (max * tglobal).toInt
   }
 
-  private def sampleEdge(edge: Edge[A,B], count: Int): Boolean = {
+  private def sampleEdge(edge: Edge[A], count: Int): Boolean = {
     if (count <= m) {
       true
     } else {
-      flipBiasedCoin((m/count)) match {
+      flipBiasedCoin(m/count) match {
         case Heads => {
           val randomEdge = sample(Random.nextInt(m))
           sample -= randomEdge
-          sample += edge
           updateCounters(Decrement, randomEdge)
           true
         }
@@ -65,20 +69,51 @@ class Triest[A,B](m: Int) extends RichMapFunction[Edge[A,B], Double] {
     }
   }
 
-  private def flipBiasedCoin(value: Double): Coin = {
-    Random.nextDouble() < value match {
+  private def flipBiasedCoin(value: Int): Coin = {
+    Random.nextInt() < value match {
       case true => Heads
       case false => Tails
     }
   }
 
-  private def updateCounters(op: Operation, edge: Edge[A,B]): Unit = {
-    // Fetch neighbours..
-    
+  private def updateCounters(op: Operation, edge: Edge[A]): Unit = {
+    val shared = sharedNeighbors(edge)
+    val sharedSize = shared.size
+
     op match {
-      case Increment =>
-      case Decrement =>
+      case Increment => {
+        tglobal += sharedSize
+        tlocal.put(edge._1, tlocal.getOrElse(edge._1, 0) + sharedSize)
+        tlocal.put(edge._2, tlocal.getOrElse(edge._2, 0) + sharedSize)
+        shared.foreach {item => tlocal.put(item, tlocal(item) + 1)}
+      }
+      case Decrement => {
+        tglobal -= sharedSize
+        val e1 = tlocal.getOrElse(edge._1, 0)
+        val e2 = tlocal.getOrElse(edge._2, 0)
+
+        if (e1 <= 0)
+          tlocal.remove(edge._1)
+        else
+          tlocal.put(edge._1, e1 - sharedSize)
+
+
+        if (e2 <= 0)
+          tlocal.remove(edge._2)
+        else
+          tlocal.put(edge._2, e2 - sharedSize)
+
+        shared.foreach {item => tlocal.put(item, tlocal(item) - 1)}
+      }
     }
   }
 
+  private def sharedNeighbors(edge: Edge[A]): Set[A]= {
+    val neighbors = (x: A) => sample.collect {
+      case (u,v) if u == x => v
+      case (u,v) if v == x => u
+    }.toSet
+
+    neighbors(edge._1) intersect neighbors(edge._2)
+  }
 }

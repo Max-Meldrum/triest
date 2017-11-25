@@ -10,5 +10,5 @@ case object Decrement extends Operation
 
 
 object Utils {
-  type Edge[A,B] = (A,B)
+  type Edge[A] = (A, A)
 }
