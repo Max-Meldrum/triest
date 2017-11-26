@@ -1,7 +1,10 @@
 import Utils.Edge
 import org.apache.flink.api.common.functions.RichMapFunction
+import org.apache.flink.api.common.time.Time
 import org.apache.flink.api.scala.ExecutionEnvironment
 import org.apache.flink.api.scala._
+import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
+
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
 
@@ -62,8 +65,9 @@ class TriestImpr[A](m: Int) extends RichMapFunction[Edge[A], Int] with TriestHel
 }
 
 object TriestImpr extends App {
-  val env = ExecutionEnvironment.getExecutionEnvironment
+  val env = StreamExecutionEnvironment.getExecutionEnvironment
   val maxEdges = 3000
+  val window = 3
 
   // Well, in this case a file..
   val stream = env.readTextFile("data/out.dolphins")
@@ -73,6 +77,11 @@ object TriestImpr extends App {
     .map(_.split("\\s+") match { case Array(a, b) => (a.toInt, b.toInt)})
     .map(triestImpr)
     .setParallelism(1)
+    .countWindowAll(window)
+    .maxBy(0)
 
   job.print()
+    .setParallelism(1)
+
+  env.execute()
 }
