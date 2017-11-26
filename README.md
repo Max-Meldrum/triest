@@ -1,6 +1,6 @@
 # TRIÈST
 
-An implementation of TRIÈST-BASE in Scala. Only supports undirected graphs.
+An implementation of TRIÈST-BASE and TRIÈST-IMPR in Scala using Apache Flink. Only supports undirected graphs.
 
 References used:
 
